@@ -24,12 +24,9 @@ routes(app);
 //END ENVIRONMENT
 
 //GLOBAL VARIABLES
-//var stk = ["FB","GOOGL","AMZN","AIV"]; //stocks being shown
-var stk = []; //stocks being shown
-var CLIENTS = [];
-var id = -1;
-var strtDate = '2015-01-01'; //Stocks start date
-//var strtDate = '2017-02-20'; //Stocks start date
+var stk = ["FB","GOOGL","AMZN","AIV"]; //stocks being shown
+//var strtDate = '2015-01-01'; //Stocks start date
+var strtDate = '2017-02-20'; //Stocks start date
 var currentEndDate = '2018-02-21'; //Stocks start date
 
 //Create server
@@ -56,11 +53,10 @@ function return_URI(arg1,sdate,edate){
     }else{
         URI += '&start_date=' + strtDate;
     }
-    if(edate.length > 0){
+    URI += '&end_date=' + currentEndDate;
+    /*if(edate.length > 0){
         URI += '&end_date=' + edate;
-    }else{
-        URI += '&end_date=' + currentEndDate;   
-    }
+    }*/
     URI += '&exclude_column_names=true&column_index=1&order=asc';
 
     return URI;
@@ -178,12 +174,6 @@ function updateStocks(){
  */
 wss.on('connection', function connection(ws, req) {
 
-    id = id + 1;
-    ws.id = id;
-    CLIENTS.push(ws);
-    console.log("connected with id: " + ws.id);
-    //CLIENTS.push(ws);
-
   //connection is up, event for request
   ws.on('message', function incoming(message) {
     //log the received message
@@ -242,9 +232,7 @@ wss.on('connection', function connection(ws, req) {
                         
                         //RET
                         ret = ret + ']}]';
-                        for(var kb = 0; kb < CLIENTS.length; kb++){
-                            CLIENTS[kb].send(JSON.stringify(ret));
-                        }
+                        ws.send(JSON.stringify(ret));
                     }
                 }));    
             }else{
@@ -260,11 +248,85 @@ wss.on('connection', function connection(ws, req) {
                 //RET
                 stk.push(stock.stock_code);
                 ret = ret + ']}]';
-                for(var kb = 0; kb < CLIENTS.length; kb++){
-                    CLIENTS[kb].send(JSON.stringify(ret));
-                }
+                ws.send(JSON.stringify(ret));
             }
         });
+    
+    //**REFRESH / UPDATE STOCKS
+    }else if(inputMessage.tp === 98){
+        console.log("CHECK STOCKS");
+        console.log(inputMessage.term);
+        if (stk.length <= 0){
+            //**Items to remove
+            var ret = "";
+            for(var i = 0; i < inputMessage.term.length; i++){
+                ret = ret + '"' + inputMessage.term[i] + '",';
+            }
+            ret = ret.substr(0,ret.length-1);
+            ws.send(JSON.stringify('[{"stock_remove":[' + ret + ']}]'));
+        }else{
+            var rets=[];
+            var rems="";
+            //**Items to add
+            for(var i = 0; i < stk.length; i++){
+                var index = inputMessage.term.indexOf(stk[i]);
+                if (index === -1) {
+                    rets.push(stk[i]);
+                }
+            }
+            //**Items to remove
+            for(var i = 0; i < inputMessage.term.length; i++){
+                var index = stk.indexOf(inputMessage.term[i]);
+                if (index === -1) {
+                    rems = rems + '"' + inputMessage.term[i] + '",';
+                }
+            }
+            //----------------
+            if(rets.length>0){
+                var ret = "";
+                Stocks.find( { 'stock_code': { $in: rets } } , function (err, stockDocs) {
+                    if (err) {
+                        console.log(err);
+                    }
+                    if (stockDocs) {
+                        var ret = '[';
+                        for (var i = 0; i < stockDocs.length; i++) {
+                            ret = ret + '{"dataset_code":"' + stockDocs[i].stock_code + '","name":"' + stockDocs[i].stock_name + '","data":[';
+                            for (var j = 0; j < stockDocs[i].stock_data.length; j++) {
+                                if (j > 0){
+                                    ret = ret + ',';
+                                }
+                                ret = ret + '["' + stockDocs[i].stock_data[j].date_day + '",' + stockDocs[i].stock_data[j].stock_value + ']';
+                            }
+                            ret = ret + ']},';
+                        }
+                        //Add Removed items
+                        if(rems.length > 0){
+                            ret = ret + '{"stock_remove":[' + rems.substr(0,rems.length-1) + ']},';
+                        }
+                        //RET
+                        if(ret.length >1){
+                            ret = ret.substr(0,ret.length-1);
+                        }
+                        ret = ret + ']';
+                        ws.send(JSON.stringify(ret));
+                    }else{
+                        if(rems.length > 0){
+                            ws.send(JSON.stringify('[{"stock_remove":[' + rems.substr(0,rems.length-1) + ']}]'));
+                        }else{
+                            ws.send(JSON.stringify('[]'));
+                        }
+                    }
+                });
+            }else{
+                if(rems.length > 0){
+                    ws.send(JSON.stringify('[{"stock_remove":[' + rems.substr(0,rems.length-1) + ']}]'));
+                }else{
+                    ws.send(JSON.stringify('[]'));
+                }
+            }
+        }
+        console.log(" ");
     //**REMOVE STOCKS
     }else if(inputMessage.tp === 99){
         console.log("STOCK REMOVED");
@@ -272,27 +334,12 @@ wss.on('connection', function connection(ws, req) {
         var index = stk.indexOf(inputMessage.term.trim().toUpperCase());     
         if (index > -1) {
             stk.splice(index, 1);
-            console.log('[{"stock_remove":[' + inputMessage.term.trim().toUpperCase() + ']}]');
-            for(var kb = 0; kb < CLIENTS.length; kb++){
-                CLIENTS[kb].send(JSON.stringify('[{"stock_remove":["' + inputMessage.term.trim().toUpperCase() + '"]}]'));
-            }
+            ws.send(JSON.stringify('[]'));
         }
+        
     }
   
   });
-  
-  ws.on('close', function() {
-        console.log('USER ' + ws.id + ' LEFT');
-        var rem = -1;
-        for(var i = 0; i<CLIENTS.length; i++){
-            if(CLIENTS[i].id === ws.id){
-                rem = i;
-                break;
-            }
-        }
-        CLIENTS.splice(rem, 1);
-  });
-    
 });
 
 /**
@@ -303,8 +350,8 @@ wss.on('connection', function connection(ws, req) {
  * Runs from Tuesday to Saturday at 01:00 and updates database
  * @returns nothing
  */
-//schedule.scheduleJob('0 1 * * 2-6', function(){
-schedule.scheduleJob('9 15 * * *', function(){
+schedule.scheduleJob('0 1 * * 2-6', function(){
+//schedule.scheduleJob('0 5 * * *', function(){
     updateStocks();
 });
 

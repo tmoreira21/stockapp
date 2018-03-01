@@ -24,12 +24,9 @@ routes(app);
 //END ENVIRONMENT
 
 //GLOBAL VARIABLES
-//var stk = ["FB","GOOGL","AMZN","AIV"]; //stocks being shown
-var stk = []; //stocks being shown
-var CLIENTS = [];
-var id = -1;
-var strtDate = '2015-01-01'; //Stocks start date
-//var strtDate = '2017-02-20'; //Stocks start date
+var stk = ["FB","GOOGL","AMZN","AIV"]; //stocks being shown
+//var strtDate = '2015-01-01'; //Stocks start date
+var strtDate = '2017-02-20'; //Stocks start date
 var currentEndDate = '2018-02-21'; //Stocks start date
 
 //Create server
@@ -39,13 +36,6 @@ var wss = new websocket.Server({ server });
 // Load Model
 var Stocks = require('./app/models/stocks.js');
 
-/**
- * *************************************
- * RETURNS QUANDL API URI
- * *************************************
- * Return the quandl api url with the received parameters
- * @returns String
- */
 //Return URI to get stock data through API
 function return_URI(arg1,sdate,edate){
     var URI = 'https://www.quandl.com/api/v3/datasets/WIKI/';
@@ -56,21 +46,15 @@ function return_URI(arg1,sdate,edate){
     }else{
         URI += '&start_date=' + strtDate;
     }
-    if(edate.length > 0){
+    URI += '&end_date=' + currentEndDate;
+    /*if(edate.length > 0){
         URI += '&end_date=' + edate;
-    }else{
-        URI += '&end_date=' + currentEndDate;   
-    }
+    }*/
     URI += '&exclude_column_names=true&column_index=1&order=asc';
 
     return URI;
 }
 
-/**
- * *************************************
- * ORDER ARRAY OF OBJECTS BY DATE
- * *************************************
- */
 function orderDataByDate(a, b){
     var keyA = new Date(a.date_day), keyB = new Date(b.date_day);
     // Compare the 2 dates
@@ -79,13 +63,7 @@ function orderDataByDate(a, b){
     return 0;
 };
 
-/**
- * *************************************
- * SENDS ACTIVE STOCKS TO CLIENT ON FIRST ACCESS
- * *************************************
- * Sends all stocks being presented to clients to a client that has just connectd to the websocket server
- * @returns nothing
- */
+// Return all stocks marked as shown
 function loadAll(ws1){
     console.log("LOAD ALL");
     console.log(stk);
@@ -107,6 +85,7 @@ function loadAll(ws1){
                 }
                 ret = ret + ']},';
             }
+            //RET
             if(ret.length >1){
                 ret = ret.substr(0,ret.length-1);
             }
@@ -119,13 +98,10 @@ function loadAll(ws1){
 }
 
 /**
- * *************************************
- * UPDATES STOCKS ON DATABASE
- * *************************************
- * Updates stocks present in the database with more recent data
- * Called by node-schedule
+ * Updates stocks present in the database base on data
  * @returns nothing
  */
+//UPDATE WITH CURRENT STOCKS
 function updateStocks(){
     //**Get today's date
     var newEndDate = new Date().toISOString().substr(0,10);
@@ -136,6 +112,7 @@ function updateStocks(){
         //**Set start date to collect data equal next day of the current end date
         var startDate = new Date(nDate.getFullYear(),nDate.getMonth(),nDate.getDate()+1).toISOString().substr(0,10);
         var cont = 0;
+        //var startDate = currentEndDate;
         //**Go through all stocks in DB
         Stocks.find({}, function(err, stockCol) {
             if (err) {
@@ -143,12 +120,17 @@ function updateStocks(){
             }
             //**For rach stock in DB update data
             stockCol.forEach(function(stock) {
+                //console.log(stock.stock_code + " --- " + stock.stock_data[stock.stock_data.length-1].date_day + " ----- " + new Date().toISOString().substr(0,10));
+                //hyperquest(return_URI(stock.stock_code,startDate,newEndDate).replace("&order=asc","&order=desc")).pipe(bl(function (err, data) {
                 //**Get data from QUANDL between the start date and newEndDate and if no new data is retrieved do not update currentEndDate so no gap could be found on data
                 hyperquest(return_URI(stock.stock_code,startDate,newEndDate)).pipe(bl(function (err, data) {
                     if(err){ return "ERR: " + console.err; }
                     var obj = JSON.parse(data.toString());
                     //**For each stock add the data of the corresponding days
                     for(var j = 0; j<obj.dataset.data.length;j++){
+                        //ORDER BY DATE ACTIVATE THIS
+                        //stock.stock_data.push({ 'date_day': obj.dataset.data[j][0], 'stock_value': obj.dataset.data[j][1]});
+                        console.log(obj.dataset.dataset_code + ' ---- ' + obj.dataset.data[j][0] + ' --- ' + obj.dataset.data[j][1]);
                         Stocks.update( { 'stock_code': obj.dataset.dataset_code },{ $push: { 'stock_data': { 'date_day': obj.dataset.data[j][0], 'stock_value': obj.dataset.data[j][1]} } }, function(err, dc) {
                             if (err) { console.log(err); }
                         });
@@ -158,6 +140,10 @@ function updateStocks(){
                             cont++;
                         }
                     }
+                    //**ORDER BY DATE ACTIVATE THIS
+                    /*Stocks.update( { 'stock_code': obj.dataset.dataset_code },{ $set: { 'stock_data':  stock.stock_data.sort(orderDataByDate) } }, function(err, dc) {
+                            if (err) { console.log(err); }
+                    });*/
                     console.log(currentEndDate);
                 }));
             });
@@ -167,22 +153,7 @@ function updateStocks(){
     }
 }
 
-
-/**
- * **************************************
- * WEBSOCKET SERVER
- * *************************************
- * Handles the websocket server connections
- * Handles the websocket server received messages from clients returning data to clients when needed
- * @returns nothing
- */
 wss.on('connection', function connection(ws, req) {
-
-    id = id + 1;
-    ws.id = id;
-    CLIENTS.push(ws);
-    console.log("connected with id: " + ws.id);
-    //CLIENTS.push(ws);
 
   //connection is up, event for request
   ws.on('message', function incoming(message) {
@@ -190,10 +161,8 @@ wss.on('connection', function connection(ws, req) {
     console.log('received: %s', message);
     var inputMessage = JSON.parse(message);
     var obj={};
-    //LOAD AT FIRST ACCESS TO PAGE
     if(inputMessage.tp === 0){
         obj = loadAll(ws);
-    //ADD STOCK
     }else if(inputMessage.tp === 1){
         //Verify if stock is in database
         Stocks.findOne({ 'stock_code': String(inputMessage.term.trim().toUpperCase()) }, function (err, stock) {
@@ -203,6 +172,7 @@ wss.on('connection', function connection(ws, req) {
             // if entry does not exist insert in DB
             if (!stock) {
                 console.log("DOES NOT EXIST IN DB - " + inputMessage.term);
+                //hyperquest(return_URI(inputMessage.term,inputMessage.endDate)).pipe(bl(function (err, data) {
                 hyperquest(return_URI(inputMessage.term,'','')).pipe(bl(function (err, data) {
                     if(err){ return "ERR: " + console.err; }
                     var chkresult = data.toString();
@@ -242,9 +212,7 @@ wss.on('connection', function connection(ws, req) {
                         
                         //RET
                         ret = ret + ']}]';
-                        for(var kb = 0; kb < CLIENTS.length; kb++){
-                            CLIENTS[kb].send(JSON.stringify(ret));
-                        }
+                        ws.send(JSON.stringify(ret));
                     }
                 }));    
             }else{
@@ -260,62 +228,121 @@ wss.on('connection', function connection(ws, req) {
                 //RET
                 stk.push(stock.stock_code);
                 ret = ret + ']}]';
-                for(var kb = 0; kb < CLIENTS.length; kb++){
-                    CLIENTS[kb].send(JSON.stringify(ret));
-                }
+                ws.send(JSON.stringify(ret));
             }
         });
-    //**REMOVE STOCKS
+    }else if(inputMessage.tp === 98){
+        console.log("CHECK STOCKS");
+        console.log(inputMessage.term);
+        if (stk.length <= 0){
+            //**Items to remove
+            console.log("NO ITEMS ON LIST REMOVE ONLY");
+            var ret = "";
+            for(var i = 0; i < inputMessage.term.length; i++){
+                ret = ret + '"' + inputMessage.term[i] + '",';
+            }
+            ret = ret.substr(0,ret.length-1);
+            
+            console.log('[{"stock_remove":[' + ret + ']}]');
+            console.log(" ");
+            ws.send(JSON.stringify('[{"stock_remove":[' + ret + ']}]'));
+        }else{
+            var rets=[];
+            var rems="";
+            //**Items to add
+            for(var i = 0; i < stk.length; i++){
+                var index = inputMessage.term.indexOf(stk[i]);
+                if (index === -1) {
+                    rets.push(stk[i]);
+                }
+            }
+            //**Items to remove
+            for(var i = 0; i < inputMessage.term.length; i++){
+                var index = stk.indexOf(inputMessage.term[i]);
+                if (index === -1) {
+                    rems = rems + '"' + inputMessage.term[i] + '",';
+                }
+            }
+            //----------------
+            if(rets.length>0){
+                var ret = "";
+                Stocks.find( { 'stock_code': { $in: rets } } , function (err, stockDocs) {
+                    if (err) {
+                        console.log(err);
+                    }
+                    if (stockDocs) {
+                        var ret = '[';
+                        for (var i = 0; i < stockDocs.length; i++) {
+                            ret = ret + '{"dataset_code":"' + stockDocs[i].stock_code + '","name":"' + stockDocs[i].stock_name + '","data":[';
+                            for (var j = 0; j < stockDocs[i].stock_data.length; j++) {
+                                if (j > 0){
+                                    ret = ret + ',';
+                                }
+                                ret = ret + '["' + stockDocs[i].stock_data[j].date_day + '",' + stockDocs[i].stock_data[j].stock_value + ']';
+                            }
+                            ret = ret + ']},';
+                        }
+                        //Add Removed items
+                        if(rems.length > 0){
+                            ret = ret + '{"stock_remove":[' + rems.substr(0,rems.length-1) + ']},';
+                        }
+                        //RET
+                        if(ret.length >1){
+                            ret = ret.substr(0,ret.length-1);
+                        }
+                        ret = ret + ']';
+                        console.log("ITEMS ON LIST - ADD AND REMOVE ITENS");
+                        console.log('{"stock_remove":[' + rems.substr(0,rems.length-1) + ']},');
+                        console.log(" ");
+                        ws.send(JSON.stringify(ret));
+                    }else{
+                        console.log("ITEMS ON LIST - REMOVE ONLY ITENS 1");
+                        if(rems.length > 0){
+                            console.log('[{"stock_remove":[' + rems.substr(0,rems.length-1) + ']}]');
+                            console.log(" ");
+                            ws.send(JSON.stringify('[{"stock_remove":[' + rems.substr(0,rems.length-1) + ']}]'));
+                        }else{
+                            console.log('[ ]');
+                            console.log(" ");
+                            ws.send(JSON.stringify('[]'));
+                        }
+                    }
+                });
+            }else{
+                console.log("ITEMS ON LIST - REMOVE ONLY ITENS 2");
+                if(rems.length > 0){
+                    console.log('[{"stock_remove":[' + rems.substr(0,rems.length-1) + ']}]');
+                    console.log(" ");
+                    ws.send(JSON.stringify('[{"stock_remove":[' + rems.substr(0,rems.length-1) + ']}]'));
+                }else{
+                    console.log('[ ]');
+                    console.log(" ");
+                    ws.send(JSON.stringify('[]'));
+                }
+            }
+        }
+        console.log(" ");
     }else if(inputMessage.tp === 99){
         console.log("STOCK REMOVED");
         console.log(" ");
         var index = stk.indexOf(inputMessage.term.trim().toUpperCase());     
         if (index > -1) {
             stk.splice(index, 1);
-            console.log('[{"stock_remove":[' + inputMessage.term.trim().toUpperCase() + ']}]');
-            for(var kb = 0; kb < CLIENTS.length; kb++){
-                CLIENTS[kb].send(JSON.stringify('[{"stock_remove":["' + inputMessage.term.trim().toUpperCase() + '"]}]'));
-            }
+            ws.send(JSON.stringify('[]'));
         }
+        
     }
   
   });
-  
-  ws.on('close', function() {
-        console.log('USER ' + ws.id + ' LEFT');
-        var rem = -1;
-        for(var i = 0; i<CLIENTS.length; i++){
-            if(CLIENTS[i].id === ws.id){
-                rem = i;
-                break;
-            }
-        }
-        CLIENTS.splice(rem, 1);
-  });
-    
 });
 
-/**
- * **************************************
- * UPDATES STOCKS ON DATABASE
- * *************************************
- * Updates stocks present in the database with data from last update date to present day
- * Runs from Tuesday to Saturday at 01:00 and updates database
- * @returns nothing
- */
+//Runs from Tuesday to Saturday at 00:01 and updates database
 //schedule.scheduleJob('0 1 * * 2-6', function(){
-schedule.scheduleJob('9 15 * * *', function(){
+schedule.scheduleJob('17 11 * * *', function(){
     updateStocks();
 });
 
-/**
- * *************************************
- * STARTS SERVER
- * *************************************
- * Starts sever listener on port 8080
- * Logs on console the listening server IP and port and datetime
- * @returns nothing
- */
+//start our server
 server.listen(8080, function listening() {
   console.log('Listening on %d', server.address().port);
   console.log(new Date().toISOString());

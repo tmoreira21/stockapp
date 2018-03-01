@@ -23,74 +23,67 @@ app.use(bodyParser.urlencoded({ extended: false }));
 routes(app);
 //END ENVIRONMENT
 
-//GLOBAL VARIABLES
-//var stk = ["FB","GOOGL","AMZN","AIV"]; //stocks being shown
-var stk = []; //stocks being shown
-var CLIENTS = [];
-var id = -1;
-var strtDate = '2015-01-01'; //Stocks start date
-//var strtDate = '2017-02-20'; //Stocks start date
-var currentEndDate = '2018-02-21'; //Stocks start date
-
 //Create server
 var server = http.createServer(app);
 var wss = new websocket.Server({ server });
 
-// Load Model
+var stk = [];
 var Stocks = require('./app/models/stocks.js');
 
-/**
- * *************************************
- * RETURNS QUANDL API URI
- * *************************************
- * Return the quandl api url with the received parameters
- * @returns String
- */
-//Return URI to get stock data through API
-function return_URI(arg1,sdate,edate){
+//function return_URI(arg1,sdate,edate){
+function return_URI(arg1){
     var URI = 'https://www.quandl.com/api/v3/datasets/WIKI/';
     URI += arg1 + '.json';
     URI += '?api_key=' + process.env.STOCK_KEY;
-    if(sdate.length > 0){
-        URI += '&start_date=' + sdate;
-    }else{
-        URI += '&start_date=' + strtDate;
-    }
-    if(edate.length > 0){
-        URI += '&end_date=' + edate;
-    }else{
-        URI += '&end_date=' + currentEndDate;   
-    }
+    //URI += '&start_date=' + sdate;
+    //URI += '&end_date=' + edate;
     URI += '&exclude_column_names=true&column_index=1&order=asc';
 
     return URI;
 }
 
-/**
- * *************************************
- * ORDER ARRAY OF OBJECTS BY DATE
- * *************************************
- */
-function orderDataByDate(a, b){
-    var keyA = new Date(a.date_day), keyB = new Date(b.date_day);
-    // Compare the 2 dates
-    if(keyA < keyB) return -1;
-    if(keyA > keyB) return 1;
-    return 0;
-};
+// Get the data for each stock and return only when all results are received
+function getURLdata(ws,item,message,i,startDate,endDate){
+    hyperquest(return_URI(item,startDate,endDate)).pipe(bl(function (err, data) {
+        if(err){ return "ERR: " + console.err; }
+        var dt = data.toString();
+        //result.push(dt);
+        cont++;
+        if(cont === stocks.length){
+            console.log(dt);
+            ws.send(JSON.stringify([dt]));
+		}
+    }));
+}
 
-/**
- * *************************************
- * SENDS ACTIVE STOCKS TO CLIENT ON FIRST ACCESS
- * *************************************
- * Sends all stocks being presented to clients to a client that has just connectd to the websocket server
- * @returns nothing
- */
+// Verify if requested item is already on database
+function verifyDatabase(message){
+    var ret = true;
+    var cont = 0;
+    Stocks.findOne({ 'stock_name': String(message) }, function (err, stock) {
+        if (err) {
+            console.log(err);
+        }
+        // if entry does not exist insert in DB
+        if (!stock) {
+            ret = false;   
+            cont++;
+        }else{
+            cont++;
+        }
+        
+    });
+    if(cont === 1){
+        return ret;
+    }
+}
+
+// Return all stocks marked as shown
 function loadAll(ws1){
     console.log("LOAD ALL");
-    console.log(stk);
     console.log(" ");
     var ret = "";
+    console.log(stk);
     Stocks.find( { 'stock_code': { $in: stk } } , function (err, stockDocs) {
         if (err) {
             console.log(err);
@@ -107,93 +100,30 @@ function loadAll(ws1){
                 }
                 ret = ret + ']},';
             }
+            //RET
             if(ret.length >1){
                 ret = ret.substr(0,ret.length-1);
             }
             ret = ret + ']';
             ws1.send(JSON.stringify(ret));
         }else{
-            ws1.send(JSON.stringify('[]'));
+            ws1.send(JSON.stringify([]));
         }
     });
 }
 
-/**
- * *************************************
- * UPDATES STOCKS ON DATABASE
- * *************************************
- * Updates stocks present in the database with more recent data
- * Called by node-schedule
- * @returns nothing
- */
-function updateStocks(){
-    //**Get today's date
-    var newEndDate = new Date().toISOString().substr(0,10);
-    //**If current end date different from today's date update stocks
-    if(currentEndDate !== newEndDate){
-        console.log("UPDATE STOCKS");
-        var nDate = new Date(currentEndDate);
-        //**Set start date to collect data equal next day of the current end date
-        var startDate = new Date(nDate.getFullYear(),nDate.getMonth(),nDate.getDate()+1).toISOString().substr(0,10);
-        var cont = 0;
-        //**Go through all stocks in DB
-        Stocks.find({}, function(err, stockCol) {
-            if (err) {
-                console.log(err);
-            }
-            //**For rach stock in DB update data
-            stockCol.forEach(function(stock) {
-                //**Get data from QUANDL between the start date and newEndDate and if no new data is retrieved do not update currentEndDate so no gap could be found on data
-                hyperquest(return_URI(stock.stock_code,startDate,newEndDate)).pipe(bl(function (err, data) {
-                    if(err){ return "ERR: " + console.err; }
-                    var obj = JSON.parse(data.toString());
-                    //**For each stock add the data of the corresponding days
-                    for(var j = 0; j<obj.dataset.data.length;j++){
-                        Stocks.update( { 'stock_code': obj.dataset.dataset_code },{ $push: { 'stock_data': { 'date_day': obj.dataset.data[j][0], 'stock_value': obj.dataset.data[j][1]} } }, function(err, dc) {
-                            if (err) { console.log(err); }
-                        });
-                        //**If new stocks detected, update currentEndDate to newEndDate
-                        if(cont === 0){
-                            currentEndDate = newEndDate;
-                            cont++;
-                        }
-                    }
-                    console.log(currentEndDate);
-                }));
-            });
-        });
-    }else{
-       console.log("NO NEED TO UPDATE STOCKS");    
-    }
-}
 
-
-/**
- * **************************************
- * WEBSOCKET SERVER
- * *************************************
- * Handles the websocket server connections
- * Handles the websocket server received messages from clients returning data to clients when needed
- * @returns nothing
- */
 wss.on('connection', function connection(ws, req) {
-
-    id = id + 1;
-    ws.id = id;
-    CLIENTS.push(ws);
-    console.log("connected with id: " + ws.id);
-    //CLIENTS.push(ws);
 
   //connection is up, event for request
   ws.on('message', function incoming(message) {
     //log the received message
     console.log('received: %s', message);
+    console.log(" ");
     var inputMessage = JSON.parse(message);
     var obj={};
-    //LOAD AT FIRST ACCESS TO PAGE
     if(inputMessage.tp === 0){
         obj = loadAll(ws);
-    //ADD STOCK
     }else if(inputMessage.tp === 1){
         //Verify if stock is in database
         Stocks.findOne({ 'stock_code': String(inputMessage.term.trim().toUpperCase()) }, function (err, stock) {
@@ -203,7 +133,9 @@ wss.on('connection', function connection(ws, req) {
             // if entry does not exist insert in DB
             if (!stock) {
                 console.log("DOES NOT EXIST IN DB - " + inputMessage.term);
-                hyperquest(return_URI(inputMessage.term,'','')).pipe(bl(function (err, data) {
+                console.log(" ");
+                //hyperquest(return_URI(inputMessage.term,inputMessage.startDate,inputMessage.endDate)).pipe(bl(function (err, data) {
+                hyperquest(return_URI(inputMessage.term)).pipe(bl(function (err, data) {
                     if(err){ return "ERR: " + console.err; }
                     var chkresult = data.toString();
                     //if dos not exist returns error
@@ -242,9 +174,7 @@ wss.on('connection', function connection(ws, req) {
                         
                         //RET
                         ret = ret + ']}]';
-                        for(var kb = 0; kb < CLIENTS.length; kb++){
-                            CLIENTS[kb].send(JSON.stringify(ret));
-                        }
+                        ws.send(JSON.stringify(ret));
                     }
                 }));    
             }else{
@@ -260,63 +190,70 @@ wss.on('connection', function connection(ws, req) {
                 //RET
                 stk.push(stock.stock_code);
                 ret = ret + ']}]';
-                for(var kb = 0; kb < CLIENTS.length; kb++){
-                    CLIENTS[kb].send(JSON.stringify(ret));
-                }
+                ws.send(JSON.stringify(ret));
             }
         });
-    //**REMOVE STOCKS
+    //}else if(tp === 2){
     }else if(inputMessage.tp === 99){
         console.log("STOCK REMOVED");
         console.log(" ");
         var index = stk.indexOf(inputMessage.term.trim().toUpperCase());     
         if (index > -1) {
             stk.splice(index, 1);
-            console.log('[{"stock_remove":[' + inputMessage.term.trim().toUpperCase() + ']}]');
-            for(var kb = 0; kb < CLIENTS.length; kb++){
-                CLIENTS[kb].send(JSON.stringify('[{"stock_remove":["' + inputMessage.term.trim().toUpperCase() + '"]}]'));
-            }
         }
+        //ws.send(JSON.stringify([]));
     }
-  
-  });
-  
-  ws.on('close', function() {
-        console.log('USER ' + ws.id + ' LEFT');
-        var rem = -1;
-        for(var i = 0; i<CLIENTS.length; i++){
-            if(CLIENTS[i].id === ws.id){
-                rem = i;
-                break;
-            }
-        }
-        CLIENTS.splice(rem, 1);
-  });
+    //get quote and dated from url
+    //----------------------------
+    //----------------------------
+    //----------------------------
+    //----------------------------
+    //verifiy if quote is on database, if not
     
+    
+    /*console.log(verifyDatabase(message));
+    if(verifyDatabase(message)===false){
+        //call stock api to check if stock quote exists
+        var inputMessage = JSON.parse(message);
+        hyperquest(return_URI(inputMessage.term,inputMessage.startDate,inputMessage.endDate)).pipe(bl(function (err, data) {
+            if(err){ return "ERR: " + console.err; }
+            var chkresult = data.toString();
+            //if dos not exist returns error
+            //console.log(chkresult);
+            if(chkresult.indexOf("QECx02")>0){
+                var obj = { errtype:1 ,desc:"<strong>Inexistent quote!</strong> Please try another." };
+                console.log(obj);
+                ws.send(JSON.stringify(obj));
+            //if exists return everything
+            }else{
+                //add message to database
+                stocks.push(inputMessage.term);
+                //reset results and counter
+                result = [];
+                cont = 0;
+                //get everything
+                for(var i = 0; i < stocks.length; i++){
+    	            getURLdata(ws,stocks[i],inputMessage.term,i,inputMessage.startDate,inputMessage.endDate);
+                }
+            }
+        }));
+    //if exists on database
+    }else{
+        var obj = { errtype:2 ,desc:"<strong>Quote already being presented!</strong> Please try another." };
+        //console.log(obj);
+        ws.send(JSON.stringify(obj));
+    }*/
+  });
+  //send immediatly a feedback to the incoming connection   
+  //ws.send(JSON.stringify('Connected to the WebSocket Server'));
 });
 
-/**
- * **************************************
- * UPDATES STOCKS ON DATABASE
- * *************************************
- * Updates stocks present in the database with data from last update date to present day
- * Runs from Tuesday to Saturday at 01:00 and updates database
- * @returns nothing
- */
-//schedule.scheduleJob('0 1 * * 2-6', function(){
-schedule.scheduleJob('9 15 * * *', function(){
-    updateStocks();
-});
+//Runs everyday at 00:01 and updates database
+/*schedule.scheduleJob('1 0 * * *', function(){
+  console.log('The answer to life, the universe, and everything!');
+});*/
 
-/**
- * *************************************
- * STARTS SERVER
- * *************************************
- * Starts sever listener on port 8080
- * Logs on console the listening server IP and port and datetime
- * @returns nothing
- */
+//start our server
 server.listen(8080, function listening() {
   console.log('Listening on %d', server.address().port);
-  console.log(new Date().toISOString());
-})
+});

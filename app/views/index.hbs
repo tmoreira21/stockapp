@@ -1,0 +1,23 @@
+	<div class="container">
+	  <h2>Stocks Graphs</h2>
+	  <form name="srch" id="srch" method="post" action="/" />
+	    <div id="highstockgraph" name="highstockgraph" style="height: 400px; min-width: 310px"></div>
+	    <div class="input-group">
+        <input type="text" name="term" id="term" class="form-control" placeholder="Please define the stock to add." value="" required>
+        <span class="input-group-btn">
+          <input type="submit" class="btn btn-primary" name="sendmsg" id="sendmsg" value="Search" />
+        </span>
+      </div><!-- /input-group -->
+      <br /><br />
+      <div id="results" name="results" style="display: inline-block;"></div>
+      <div id="err" name="err" class="alert alert-warning fade in" hidden="hidden" role="alert">
+        <a href="#" class="close" data-hide="alert" aria-label="close">&times;</a>
+        <div id="err1" name="err1">&nbsp;</div>
+        </button>
+      </div>
+      <div class="container" id="stock_mng" name="stock_mng" style="background-color:#FFFFFF;"></div>
+      </div>
+	  </form>
+	</div>
+  <!--<script type="text/javascript" src="/public/js/script.js"></script>-->
+  <!-- {{#if term }}{{ term }}{{/if}} -->
